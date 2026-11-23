@@ -1,0 +1,22 @@
+[project]
+name = "comfyui-genia"
+version = "0.0.1"
+description = "GenIA generative 3D reconstruction in ComfyUI: image + object masks to mesh, camera and Gaussian splat."
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = []
+classifiers = [
+    "Operating System :: OS Independent",
+    "Environment :: GPU :: NVIDIA CUDA",
+]
+
+[project.urls]
+Repository = "https://github.com/s-esposito/ComfyUI-GenIA"
+"Bug Tracker" = "https://github.com/s-esposito/ComfyUI-GenIA/issues"
+
+[tool.comfy]
+PublisherId = "s-esposito"
+DisplayName = "ComfyUI-GenIA"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
