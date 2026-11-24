@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-genia"
-version = "0.0.1"
-description = "GenIA generative 3D reconstruction in ComfyUI: image + object masks to mesh, camera and Gaussian splat."
+version = "0.1.0"
+description = "GenIA generative 3D reconstruction in ComfyUI: one photo or several views + object masks to a mesh, the cameras, a Gaussian splat and a turntable."
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = []

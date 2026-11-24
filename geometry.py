@@ -1,10 +1,11 @@
 """GenIA's outputs as ComfyUI's 3D types: numpy/torch only (ComfyUI's environment has neither
 trimesh nor plyfile).
 
-GenIA's world is R3 (x right, y down, z forward: OpenCV's, the input camera's for one image);
-ComfyUI's 3D nodes are right-handed y-up (three.js, a camera looking down -z). The two differ
-by a half-turn about x, ``FLIP``, which maps R3's camera axes onto three.js' too, so a camera's
-rotation conjugates by it and the splats' SH coefficients change sign by their parity in y, z.
+GenIA's world is R3 (x right, y down, z forward: OpenCV's, the input camera's for one image).
+ComfyUI's MESH and LOAD3D_CAMERA are right-handed y-up (three.js, a camera looking down -z), a
+half-turn about x away (``FLIP``, which maps R3's camera axes onto three.js' too, so a camera's
+rotation conjugates by it). Its SPLAT is 3DGS' own frame, R3 again (its viewer turns it upright
+by the same half-turn), so the splats keep GenIA's frame.
 """
 import json
 import struct
@@ -14,14 +15,6 @@ import torch
 
 #: R3 -> y-up: a half-turn about x.
 FLIP = np.diag([1.0, -1.0, -1.0])
-
-#: Each real SH basis function's sign under ``FLIP`` (y -> -y, z -> -z), in 3DGS's order.
-_SH_FLIP_SIGNS = np.array([
-    1,                              # degree 0
-    -1, -1, 1,                      # degree 1: y, z, x
-    -1, 1, 1, -1, 1,                # degree 2: xy, yz, 3z²-1, xz, x²-y²
-    -1, 1, -1, -1, 1, -1, 1,        # degree 3
-], dtype=np.float32)
 
 
 def read_glb_mesh(path):
@@ -139,16 +132,6 @@ def gaussians_from_ply(path):
     return positions, scales, rotations, opacities, sh
 
 
-def flip_gaussians(positions, rotations, sh):
-    """The splats' R3 attributes in the y-up frame (scales and opacities do not change)."""
-    positions = positions @ FLIP.T
-    # q' = q_flip * q, q_flip = (0, 1, 0, 0): (w, x, y, z) -> (-x, w, -z, y)
-    w, x, y, z = rotations.T
-    rotations = np.stack([-x, w, -z, y], 1)
-    sh = sh * _SH_FLIP_SIGNS[:sh.shape[1], None]
-    return positions, rotations, sh
-
-
 def _quaternion_wxyz(R):
     """A rotation matrix's unit quaternion (w, x, y, z), from its largest component (stable
     for every rotation, half-turns included)."""
@@ -189,16 +172,36 @@ def camera_info(c2w, K, target):
     }
 
 
-def to_comfy(mesh_glb, splat_ply, cameras, place_on_ground, MESH, SPLAT):
-    """``(MESH, [LOAD3D_CAMERA], SPLAT)`` from GenIA's world mesh, world splats and input
-    cameras (``poses.json``'s entries), in ComfyUI's y-up frame; with ``place_on_ground`` all
-    are raised so the mesh rests on y = 0. ``MESH``/``SPLAT`` are ComfyUI's classes."""
+def srgb_to_linear(c):
+    """sRGB values in [0, 1] as linear ones (glTF's COLOR_0, ComfyUI's MESH colours)."""
+    c = np.clip(c, 0, 1)
+    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4).astype(np.float32)
+
+
+def merged_gaussians(paths):
+    """``gaussians_from_ply`` of several PLYs as one set (SH padded to the most bands)."""
+    parts = [gaussians_from_ply(p) for p in paths]
+    k = max(part[4].shape[1] for part in parts)
+    parts = [(*part[:4], np.pad(part[4], ((0, 0), (0, k - part[4].shape[1]), (0, 0))))
+             for part in parts]
+    return tuple(np.concatenate(arrays) for arrays in zip(*parts))
+
+
+def to_comfy(mesh_glb, splat_plys, cameras, place_on_ground, MESH, SPLAT):
+    """``(MESH, [LOAD3D_CAMERA], SPLAT)`` from GenIA's world mesh, splat PLYs (merged: the
+    objects, and the background if given) and input cameras (``poses.json``'s entries), in
+    ComfyUI's frames (mesh and cameras y-up, splats 3DGS'); with ``place_on_ground`` all are
+    raised so the mesh rests on y = 0 (up). ``MESH``/``SPLAT`` are ComfyUI's classes.
+
+    GenIA's vertex colours are display (sRGB) values with the photo's shading in them: they
+    become linear (ComfyUI's and glTF's convention) on an unlit mesh, which ComfyUI's viewer
+    and Save GLB (``KHR_materials_unlit``) then show as they are, as GenIA's demo does."""
     verts, faces, colours = read_glb_mesh(mesh_glb)
     verts = verts @ FLIP.T
-    positions, scales, rotations, opacities, sh = gaussians_from_ply(splat_ply)
-    positions, rotations, sh = flip_gaussians(positions, rotations, sh)
+    colours = np.concatenate([srgb_to_linear(colours[:, :3]), colours[:, 3:]], 1)
+    positions, scales, rotations, opacities, sh = merged_gaussians(splat_plys)
     lift = np.array([0.0, -verts[:, 1].min() if place_on_ground else 0.0, 0.0])
-    verts, positions = verts + lift, positions + lift
+    verts, positions = verts + lift, positions + FLIP @ lift   # the lift, in each one's frame
     target = (verts.min(0) + verts.max(0)) / 2
     infos = []
     for camera in cameras:
@@ -206,6 +209,6 @@ def to_comfy(mesh_glb, splat_ply, cameras, place_on_ground, MESH, SPLAT):
         c2w[:3, 3] += FLIP @ lift   # the lift, in R3 (FLIP is its own inverse)
         infos.append(camera_info(c2w, camera["K"], target))
     t = lambda a, dtype=torch.float32: torch.as_tensor(np.ascontiguousarray(a), dtype=dtype)[None]
-    mesh = MESH(t(verts), t(faces, torch.int64), vertex_colors=t(colours))
+    mesh = MESH(t(verts), t(faces, torch.int64), vertex_colors=t(colours), unlit=True)
     splat = SPLAT(t(positions), t(scales), t(rotations), t(opacities), t(sh))
     return mesh, infos, splat

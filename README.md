@@ -1,62 +1,101 @@
 # ComfyUI-GenIA
 
-GenIA generative 3D reconstruction as ComfyUI nodes:
-reconstruct what the image observes, generate consistently what it does not. The node design
-(one reconstruct node, image + optional mask in, a mesh and a camera out) is inspired by
-[ComfyUI-Cupid3D](https://github.com/Nekodificador/ComfyUI-Cupid3D); no code is shared.
+![GenIA for ComfyUI](assets/teaser.jpg)
 
-## Status
+[GenIA](https://facebookresearch.github.io/GenIA/) in ComfyUI: 3D reconstruction of the
+objects in one photo, or in several photos of one static scene. What the photos see is
+reconstructed; what they don't is generated.
 
-Work in progress. **M5: both nodes run GenIA** (checked on an RTX 4090 with ComfyUI v0.46.2,
-both ways below).
+[Project page](https://facebookresearch.github.io/GenIA/) ·
+[Paper](https://arxiv.org/abs/2610.12388) · [GenIA code](https://github.com/facebookresearch/GenIA)
 
-| Node | Inputs | Outputs |
-|------|--------|---------|
-| GenIA Reconstruct (Image) (`3d/GenIA`) | `image` IMAGE, `mask` MASK (one mask per object as a batch, or white-on-black; required), `seed` INT, `quality` fast/full, `low_vram` auto/on/off, `place_on_ground` BOOLEAN | `mesh` MESH, `camera_info` LOAD3D_CAMERA, `splat` SPLAT |
-| GenIA Reconstruct (Multi-view) (`3d/GenIA`) | `images` IMAGE (the views, a batch of two or more), `objects`: one `mask` input per object (it grows as you connect them), each a MASK batch with the object's mask in every view; then as above | `mesh` MESH, `camera_info` LOAD3D_CAMERA (every view's camera, a camera list), `splat` SPLAT |
+## Quick start
 
-`quality`: `full` is GenIA's paper settings; `fast` (default) runs FINETUNE 40 iterations
-instead of 100: 35-64% less time, slightly softer texture. The outputs are in ComfyUI's
-y-up frame: the mesh (vertex colours) and splats of every object, the input camera, and with
-`place_on_ground` all three raised so the mesh rests on y = 0.
+1. Install [GenIA](https://github.com/facebookresearch/GenIA) (`bash install.sh` in its
+   checkout: Linux, an NVIDIA GPU with 24 GB or more, CUDA 12.8). It needs GenIA's demo
+   (`demo/`), released on <GenIA release date>.
+2. Install ComfyUI into GenIA's environment: `pip install -r ComfyUI/requirements.txt`.
+3. Clone this repo into `ComfyUI/custom_nodes/` and start ComfyUI from GenIA's environment.
+4. Open a template: Templates → ComfyUI-GenIA → **GenIA - example image**, and run it.
 
-## How it runs GenIA
+## Nodes
 
-GenIA depends on CUDA extensions (gsplat, pytorch3d, spconv, ...) built against one torch,
-so the node runs it one of two ways, decided when it first runs:
+**GenIA Reconstruct** (`3d/GenIA`)
 
-- **In ComfyUI's process (recommended)**: ComfyUI installed into GenIA's environment. GenIA
-  imports there, its models load into ComfyUI's process on the first run (~25 s) and stay;
-  ComfyUI's own models are unloaded before each run to make room. ComfyUI's requirements add
-  packages to GenIA's environment and change none of GenIA's.
-- **In a worker process**: ComfyUI in an environment of its own (e.g. an existing install).
-  The node starts GenIA's warm worker with GenIA's environment's Python (`GENIA_PYTHON`);
-  the models stay loaded there between runs.
+| Input | |
+|---|---|
+| `images` | One photo, or the views of one static scene as a batch. Their cameras are estimated. |
+| `objects` | Which objects: a MASK batch (one mask per object; for several views, each object's masks in view order, one object after another), or the output of ComfyUI's SAM3 Video Track run over the views. |
+| `quality` | `fast` (default): FINETUNE 40 iterations. `full`: the paper's settings, 100. `draft`: no FINETUNE. |
+| `seed` | 42 by default, as in GenIA's demo. |
+| `pose_refinement` | `photometric` (default) or `icp`. |
+| `low_vram` | `auto` (on below 44 GB of free GPU memory), `on`, `off`. On fits a 24 GB GPU. |
+| `place_on_ground` | Rest the result on the ground plane (y = 0). |
+| `background` | Add the rest of the photos to the splat. |
+| `extra_overrides` | GenIA Hydra overrides, added last. |
 
-Either way it is GenIA's own demo recipe (`demo/method.py`, `demo/ui/{inprocess,worker}.py`
-in GenIA's checkout): the node stages the image and masks as a scene, runs it, and reads the
-run's `final/` back as ComfyUI's MESH / LOAD3D_CAMERA / SPLAT. GenIA's progress drives the
-node's progress bar; ComfyUI's cancel stops the run.
+| Output | |
+|---|---|
+| `mesh` | All objects, vertex-coloured. |
+| `camera_info` | The input camera (for several views, the first). Save Splat seen from it shows the input view. |
+| `splat` | All objects as Gaussian splats, and the background. |
+| `orbit` | A turntable video. |
 
-## Install
+The node shows the run's progress (its step, object and time left), and ComfyUI's cancel
+stops it. A run on inputs seen before resumes after the last step whose settings did not
+change: changing `quality` re-runs only fine-tuning and what follows.
 
-1. Install GenIA (`bash install.sh` in its checkout: a conda env, Linux, CUDA 12.8).
-2. Clone this repo into `ComfyUI/custom_nodes/` (or symlink it there).
-3. Either:
-   - **recommended**: run ComfyUI from GenIA's environment, after
-     `pip install -r ComfyUI/requirements.txt` in it; or
-   - keep ComfyUI's environment and start it with `GENIA_ROOT=<GenIA checkout>` and
-     `GENIA_PYTHON=<GenIA's env>/bin/python`.
+**GenIA Example Scene** (`3d/GenIA`): one of the scenes bundled with GenIA's demo, as
+`images` and `objects` ready for GenIA Reconstruct.
 
-Tests (CPU only, from the ComfyUI env):
+## Templates
 
-```bash
-PYTHONPATH=/path/to/ComfyUI pytest -v
-```
+- **GenIA - example image**, **GenIA - example multi-view**: an example scene, reconstructed
+  and saved (mesh, splat, turntable).
+- **GenIA - your own photo (SAM3)**: Load Image → SAM3 Detect (name the objects) → GenIA.
+- **GenIA - your own views (SAM3)**: Load Image per view → Batch Images → SAM3 Video Track →
+  GenIA.
+
+The SAM3 templates use ComfyUI's own SAM3 nodes; ComfyUI offers to download their checkpoint
+(`sam3.1_multiplex_fp16.safetensors`). They open on photos from GenIA's demo, which the pack
+copies into ComfyUI's `input/` when it loads (`genia_*.png`, never over an existing file).
+
+## How it runs
+
+GenIA's CUDA extensions are built against one torch, so the node runs GenIA one of two ways:
+
+- **In ComfyUI's process** (recommended): ComfyUI runs in GenIA's environment. GenIA's models
+  load on the first run (~25 s) and stay loaded; ComfyUI's own models are unloaded before
+  each run to make room.
+- **In a worker process**: ComfyUI keeps its own environment. Start it with
+  `GENIA_ROOT=<GenIA checkout>` and `GENIA_PYTHON=<GenIA's env>/bin/python`; the node starts
+  GenIA in a process of its own, whose models stay loaded between runs.
+
+Either way a run is the GenIA demo's own recipe (`demo/method.py`), so it gives the demo's
+results. Tested with ComfyUI v0.46.2 on an RTX 4090 (24 GB). GenIA's log goes to ComfyUI's
+console (`--verbose DEBUG` for all of it).
+
+Tests (CPU, ComfyUI importable): `PYTHONPATH=/path/to/ComfyUI pytest -v`
 
 ## License
 
-This pack is licensed under the **GNU GPL v3.0** (see `LICENSE`). GenIA itself is licensed
-under **CC BY-NC 4.0** (non-commercial); it is not part of this repository (the node loads it
-from your GenIA checkout), and its license governs your use of GenIA's code, weights and
-outputs.
+This pack: **GNU GPL v3.0** (`LICENSE`). GenIA is not part of it (the node loads your GenIA
+checkout) and has its own license, **CC BY-NC 4.0** (non-commercial), which governs GenIA's
+code, weights and outputs.
+
+The node design (one reconstruct node: images and masks in, a mesh and a camera out) is
+inspired by [ComfyUI-Cupid3D](https://github.com/Nekodificador/ComfyUI-Cupid3D); no code is
+shared.
+
+## Citation
+
+```bibtex
+@article{esposito2026genia,
+  title   = {GenIA: Generative Reconstruction with Test-Time Input Alignment},
+  author  = {Esposito, Stefano and Pearl, Naama and Karpikova, Polina and
+             Rota Bul{\`o}, Samuel and Porzi, Lorenzo and Kontschieder, Peter and
+             Geiger, Andreas and Luiten, Jonathon},
+  journal = {arXiv preprint arXiv:2610.12388},
+  year    = {2026}
+}
+```
