@@ -12,8 +12,8 @@ reconstructed; what they don't is generated.
 ## Quick start
 
 1. Install [GenIA](https://github.com/facebookresearch/GenIA) (`bash install.sh` in its
-   checkout: Linux, an NVIDIA GPU with 24 GB or more, CUDA 12.8). It needs GenIA's demo
-   (`demo/`), released on <GenIA release date>.
+   checkout: Linux, an NVIDIA GPU with 24 GB or more, CUDA 12.8). The pack needs GenIA's
+   demo (`demo/`), which comes with GenIA's next release.
 2. Install ComfyUI into GenIA's environment: `pip install -r ComfyUI/requirements.txt`.
 3. Clone this repo into `ComfyUI/custom_nodes/` and start ComfyUI from GenIA's environment.
 4. Open a template: Templates → ComfyUI-GenIA → **GenIA - example image**, and run it.
